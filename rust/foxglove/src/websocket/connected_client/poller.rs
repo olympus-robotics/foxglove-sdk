@@ -47,6 +47,17 @@ impl Poller {
         let ws_rx_loop = async {
             while let Some(msg) = ws_rx.next().await {
                 match msg {
+                    Ok(Message::Ping(payload)) => {
+                        // Reply with Pong. Use control plane semantics so it shares backpressure logic.
+                        // If sending fails, connection will likely close soon anyway.
+                        if let Err(err) = ws_tx.send(Message::Pong(payload)).await {
+                            tracing::error!("Error sending Pong: {err}");
+                            break;
+                        }
+                    }
+                    Ok(Message::Pong(_)) => {
+                        // Ignore; could track latency if desired.
+                    }
                     Ok(Message::Close(_)) => break,
                     Ok(msg) => client.handle_message(msg),
                     Err(err) => tracing::error!("Error receiving from client {addr}: {err}"),

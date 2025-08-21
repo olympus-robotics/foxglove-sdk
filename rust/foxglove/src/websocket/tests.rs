@@ -107,9 +107,9 @@ async fn test_client_connect() {
     let _ = server.stop();
 }
 
+#[cfg(feature = "tls")]
 #[traced_test]
 #[tokio::test]
-#[cfg(feature = "tls")]
 async fn test_secure_client_connect() {
     let ctx = Context::new();
     let ca_params = CertificateParams::default();
@@ -146,6 +146,27 @@ async fn test_secure_client_connect() {
 
     let msg = expect_recv!(client, ServerMessage::ServerInfo);
     assert_eq!(msg.session_id, Some("tls_sess_id".to_string()));
+
+    let _ = server.stop();
+}
+
+#[traced_test]
+#[tokio::test]
+async fn test_ping_pong_response() {
+    let ctx = Context::new();
+    let server = create_server(&ctx, ServerOptions::default());
+    let addr = server.start("127.0.0.1", 0).await.expect("Failed to start server");
+
+    let mut client = WebSocketClient::connect(addr).await;
+    // First message should be ServerInfo
+    expect_recv!(client, ServerMessage::ServerInfo);
+
+    // Send a ping frame
+    client.send(Message::Ping(vec![1,2,3])).await.expect("send ping");
+
+    // Expect a pong
+    let msg = client.recv_msg().await.expect("recv pong");
+    assert!(matches!(msg, Message::Pong(p) if p == vec![1,2,3]));
 
     let _ = server.stop();
 }
