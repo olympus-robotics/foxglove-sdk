@@ -15,6 +15,8 @@ pub struct ServiceCallRequest<'a> {
     pub service_id: u32,
     /// Call ID.
     pub call_id: u32,
+    /// Timeout in milliseconds for the service call. A value of 0 may be treated as no timeout.
+    pub timeout_ms: u32,
     /// Encoding.
     pub encoding: Cow<'a, str>,
     /// Payload.
@@ -27,6 +29,7 @@ impl ServiceCallRequest<'_> {
         ServiceCallRequest {
             service_id: self.service_id,
             call_id: self.call_id,
+            timeout_ms: self.timeout_ms,
             encoding: Cow::Owned(self.encoding.into_owned()),
             payload: Cow::Owned(self.payload.into_owned()),
         }
@@ -35,11 +38,13 @@ impl ServiceCallRequest<'_> {
 
 impl<'a> BinaryMessage<'a> for ServiceCallRequest<'a> {
     fn parse_binary(mut data: &'a [u8]) -> Result<Self, ParseError> {
-        if data.remaining() < 4 + 4 + 4 {
+        // Need service id, call id, timeout, encoding length
+        if data.remaining() < 4 + 4 + 4 + 4 {
             return Err(ParseError::BufferTooShort);
         }
         let service_id = data.get_u32_le();
         let call_id = data.get_u32_le();
+        let timeout_ms = data.get_u32_le();
         let encoding_length = data.get_u32_le() as usize;
         if data.remaining() < encoding_length {
             return Err(ParseError::BufferTooShort);
@@ -49,17 +54,19 @@ impl<'a> BinaryMessage<'a> for ServiceCallRequest<'a> {
         Ok(Self {
             service_id,
             call_id,
+            timeout_ms,
             encoding,
             payload: Cow::Borrowed(data),
         })
     }
 
     fn to_bytes(&self) -> Vec<u8> {
-        let size = 1 + 4 + 4 + 4 + self.encoding.len() + self.payload.len();
+        let size = 1 + 4 + 4 + 4 + 4 + self.encoding.len() + self.payload.len();
         let mut buf = Vec::with_capacity(size);
         buf.put_u8(BinaryOpcode::ServiceCallRequest as u8);
         buf.put_u32_le(self.service_id);
         buf.put_u32_le(self.call_id);
+        buf.put_u32_le(self.timeout_ms);
         buf.put_u32_le(self.encoding.len() as u32);
         buf.put_slice(self.encoding.as_bytes());
         buf.put_slice(&self.payload);
@@ -79,6 +86,7 @@ mod tests {
         ServiceCallRequest {
             service_id: 10,
             call_id: 12,
+            timeout_ms: 5_000,
             encoding: "json".into(),
             payload: br#"{"key": "value"}"#.into(),
         }
@@ -96,12 +104,13 @@ mod tests {
             Err(ParseError::BufferTooShort)
         );
         assert_matches!(
-            ServiceCallRequest::parse_binary(&[0; 11]),
+            ServiceCallRequest::parse_binary(&[0; 15]),
             Err(ParseError::BufferTooShort)
         );
         let mut buf = Vec::new();
         buf.put_u32_le(10);
         buf.put_u32_le(12);
+        buf.put_u32_le(0);
         buf.put_u32_le(1);
         assert_matches!(
             ServiceCallRequest::parse_binary(&buf),

@@ -277,6 +277,7 @@ impl State {
         let msg = ServiceCallRequest {
             service_id,
             call_id,
+            timeout_ms: 0,
             encoding,
             payload,
         }

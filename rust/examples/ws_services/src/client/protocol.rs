@@ -91,6 +91,7 @@ pub struct UnadvertiseServices {
 pub struct ServiceCallRequest<'a> {
     pub service_id: u32,
     pub call_id: u32,
+    pub timeout_ms: u32,
     pub encoding: &'a str,
     pub payload: Bytes,
 }
@@ -101,6 +102,7 @@ impl ServiceCallRequest<'_> {
         buf.put_u8(BinaryOpcode::ServiceCallRequest as u8);
         buf.put_u32_le(self.service_id);
         buf.put_u32_le(self.call_id);
+        buf.put_u32_le(self.timeout_ms);
         buf.put_u32_le(encoding_raw.len() as u32);
         buf.put(encoding_raw);
         buf.put(self.payload);

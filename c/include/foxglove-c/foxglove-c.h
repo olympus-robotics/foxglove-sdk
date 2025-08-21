@@ -2104,6 +2104,10 @@ typedef struct foxglove_service_request {
    */
   uint32_t call_id;
   /**
+   * Timeout in milliseconds requested by the client. 0 indicates no timeout.
+   */
+  uint32_t timeout_ms;
+  /**
    * The request encoding.
    */
   struct foxglove_string encoding;

@@ -772,10 +772,12 @@ std::vector<std::byte> makeServiceRequest(
   const std::vector<std::byte>& payload
 ) {
   std::vector<std::byte> buffer;
-  buffer.reserve(1 + 4 + 4 + 4 + encoding.size() + payload.size());
+  buffer.reserve(1 + 4 + 4 + 4 + 4 + encoding.size() + payload.size());
   buffer.emplace_back(static_cast<std::byte>(2));  // Service call request opcode
   writeUint32LE(buffer, service_id);
   writeUint32LE(buffer, call_id);
+  // timeout_ms (use 0 for tests unless explicitly overridden later by editing helper signature)
+  writeUint32LE(buffer, 0);
   writeUint32LE(buffer, static_cast<uint32_t>(encoding.size()));
   for (char c : encoding) {
     buffer.emplace_back(static_cast<std::byte>(c));

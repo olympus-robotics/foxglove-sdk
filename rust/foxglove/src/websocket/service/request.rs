@@ -16,6 +16,7 @@ pub struct Request {
     call_id: CallId,
     encoding: String,
     payload: Bytes,
+    timeout_ms: u32,
 }
 
 impl std::fmt::Debug for Request {
@@ -37,6 +38,7 @@ impl Request {
         call_id: CallId,
         encoding: String,
         payload: Bytes,
+        timeout_ms: u32,
     ) -> Self {
         Self {
             service,
@@ -44,6 +46,7 @@ impl Request {
             call_id,
             encoding,
             payload,
+            timeout_ms,
         }
     }
 
@@ -70,6 +73,11 @@ impl Request {
     /// A reference to the request payload.
     pub fn payload(&self) -> &[u8] {
         &self.payload
+    }
+
+    /// The timeout in milliseconds requested by the client. A value of 0 indicates no timeout.
+    pub fn timeout_ms(&self) -> u32 {
+        self.timeout_ms
     }
 
     /// Consumes the request to return the inner payload.

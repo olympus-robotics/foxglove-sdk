@@ -591,6 +591,7 @@ impl ConnectedClient {
             call_id,
             req.encoding.into_owned(),
             req.payload.into_owned().into(),
+            req.timeout_ms,
         );
 
         // Invoke the handler.

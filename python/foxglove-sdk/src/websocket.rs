@@ -725,6 +725,12 @@ impl PyServiceRequest {
     fn payload(&self) -> &[u8] {
         self.0.payload()
     }
+
+    /// The requested timeout in milliseconds (0 means no timeout specified).
+    #[getter]
+    fn timeout_ms(&self) -> u32 {
+        self.0.timeout_ms()
+    }
 }
 
 /// A service schema.

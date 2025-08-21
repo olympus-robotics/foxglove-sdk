@@ -33,6 +33,8 @@ pub struct FoxgloveServiceRequest {
     pub client_id: u32,
     /// The call ID that uniquely identifies this request for this client.
     pub call_id: u32,
+    /// The timeout in milliseconds requested by the client. 0 means no timeout.
+    pub timeout_ms: u32,
     /// The request encoding.
     pub encoding: FoxgloveString,
     /// The request payload.
@@ -44,6 +46,7 @@ impl From<&Request> for FoxgloveServiceRequest {
             service_name: req.service_name().into(),
             client_id: req.client_id().into(),
             call_id: req.call_id().into(),
+            timeout_ms: req.timeout_ms(),
             encoding: req.encoding().into(),
             payload: req.payload().into(),
         }

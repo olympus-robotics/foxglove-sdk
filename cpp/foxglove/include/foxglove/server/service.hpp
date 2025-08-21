@@ -64,6 +64,8 @@ struct ServiceRequest {
   uint32_t client_id;
   /// Call ID, unique to the client.
   uint32_t call_id;
+  /// Timeout requested by the client in milliseconds (0 means no timeout specified).
+  uint32_t timeout_ms;
   /// Message encoding.
   std::string encoding;
   /// Request message data.

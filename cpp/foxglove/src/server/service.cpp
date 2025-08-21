@@ -47,6 +47,7 @@ ServiceRequest::ServiceRequest(const foxglove_service_request* r) noexcept
     : service_name(r->service_name.data, r->service_name.len)
     , client_id(r->client_id)
     , call_id(r->call_id)
+    , timeout_ms(r->timeout_ms)
     , encoding(r->encoding.data, r->encoding.len)
     , payload(
         reinterpret_cast<const std::byte*>(r->payload.data),
