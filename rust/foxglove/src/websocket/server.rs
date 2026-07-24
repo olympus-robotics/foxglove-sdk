@@ -307,6 +307,13 @@ impl Server {
     /// Accept handler which spawns a new task for each incoming connection.
     async fn accept_connections(self: Arc<Self>, listener: TcpListener) {
         while let Ok((stream, addr)) = listener.accept().await {
+            // Disable Nagle's algorithm: live telemetry messages are small
+            // and latency-sensitive, and coalescing them against the
+            // receiver's delayed-ACK timer adds up to 200 ms of buffering
+            // per lone segment on low-rate connections.
+            if let Err(err) = stream.set_nodelay(true) {
+                tracing::warn!("Failed to set TCP_NODELAY for {addr}: {err}");
+            }
             if let Some(tasks) = self.tasks.lock().as_mut() {
                 tasks.spawn(self.clone().handle_connection(stream, addr));
             } else {
