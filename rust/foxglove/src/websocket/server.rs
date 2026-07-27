@@ -597,15 +597,19 @@ impl Server {
             }
         }
 
-        let mut service_names: Vec<String> = self
+        // Ids as well as names: a client caches the name-to-id mapping and
+        // calls services by id, so a restart that reassigns ids must invalidate
+        // the token even when the set of names is unchanged.
+        let mut services: Vec<(String, u32)> = self
             .services
             .read()
             .values()
-            .map(|service| service.name().to_string())
+            .map(|service| (service.name().to_string(), service.id().into()))
             .collect();
-        service_names.sort();
-        for name in &service_names {
+        services.sort();
+        for (name, id) in &services {
             absorb(name.as_bytes());
+            absorb(&id.to_le_bytes());
         }
 
         format!("{hash_a:016x}{hash_b:016x}")
