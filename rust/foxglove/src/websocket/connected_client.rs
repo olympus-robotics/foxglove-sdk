@@ -1,5 +1,6 @@
 use std::collections::hash_map::Entry;
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Weak;
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
@@ -75,6 +76,10 @@ pub(super) struct ConnectedClient {
     advertised_channels: parking_lot::Mutex<HashMap<ClientChannelId, Arc<ClientChannel>>>,
     server: Weak<Server>,
     shutdown_tx: parking_lot::Mutex<Option<oneshot::Sender<ShutdownReason>>>,
+    /// Set when the client proved at handshake time that it already holds the
+    /// current catalogue. Consumed by the first bulk `add_channels`, so any
+    /// channel discovered later is advertised normally.
+    suppress_initial_advertisement: AtomicBool,
 }
 
 impl std::fmt::Debug for ConnectedClient {
@@ -119,6 +124,30 @@ impl Sink for ConnectedClient {
             .copied()
             .collect::<Vec<_>>();
 
+        if self
+            .suppress_initial_advertisement
+            .swap(false, Ordering::SeqCst)
+        {
+            // The client proved it already holds exactly this catalogue. Record
+            // the channels anyway -- subscriptions resolve against this map, so
+            // skipping it would break every later subscribe -- but send nothing.
+            let mut advertised_channels = self.channels.write();
+            for &channel in &filtered_channels {
+                advertised_channels.insert(channel.id(), channel.clone());
+            }
+            tracing::info!(
+                "Suppressed advertisement of {} channels to client {}: catalogue already current",
+                filtered_channels.len(),
+                self.addr
+            );
+            return None;
+        }
+
+        tracing::info!(
+            "Advertising {} channels to client {}",
+            filtered_channels.len(),
+            self.addr
+        );
         for channels in filtered_channels.chunks(ADVERTISE_CHANNEL_BATCH_SIZE) {
             self.advertise_channels(channels);
         }
@@ -171,7 +200,20 @@ impl ConnectedClient {
             advertised_channels: parking_lot::Mutex::default(),
             server: server.clone(),
             shutdown_tx: parking_lot::Mutex::new(Some(shutdown_tx)),
+            suppress_initial_advertisement: AtomicBool::new(false),
         })
+    }
+
+    /// Marks this client as already holding the current advertisement
+    /// catalogue, so the initial channel and service advertisement is recorded
+    /// but not sent.
+    pub fn suppress_initial_advertisement(&self) {
+        self.suppress_initial_advertisement
+            .store(true, Ordering::SeqCst);
+    }
+
+    pub fn is_initial_advertisement_suppressed(&self) -> bool {
+        self.suppress_initial_advertisement.load(Ordering::SeqCst)
     }
 
     pub fn id(&self) -> ClientId {

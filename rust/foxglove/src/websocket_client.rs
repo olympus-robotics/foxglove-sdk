@@ -80,7 +80,22 @@ impl WebSocketClient {
     }
 
     pub async fn connect(addr: impl AsRef<str>) -> Result<Self, WebSocketClientError> {
-        let mut request = format!("ws://{addr}/", addr = addr.as_ref())
+        Self::connect_with_query(addr, "").await
+    }
+
+    /// Connects with an additional handshake query string, e.g. an
+    /// `advertisement_token` offered back to the server.
+    pub async fn connect_with_query(
+        addr: impl AsRef<str>,
+        query: impl AsRef<str>,
+    ) -> Result<Self, WebSocketClientError> {
+        let query = query.as_ref();
+        let suffix = if query.is_empty() {
+            String::new()
+        } else {
+            format!("?{query}")
+        };
+        let mut request = format!("ws://{addr}/{suffix}", addr = addr.as_ref())
             .into_client_request()
             .expect("Failed to build request");
 

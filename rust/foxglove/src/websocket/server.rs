@@ -30,6 +30,11 @@ use super::{
     ServerListener, Status,
 };
 
+/// Server-info metadata key carrying the advertisement catalogue fingerprint.
+/// Clients replay this value as the `advertisement_token` query parameter on a
+/// later connection to be spared a catalogue they already hold.
+const ADVERTISEMENT_TOKEN_METADATA_KEY: &str = "voliro-advertisement-token";
+
 // Queue up to 1024 messages per connected client before dropping messages
 // Can be overridden by ServerOptions::message_backlog_size.
 const DEFAULT_MESSAGE_BACKLOG_SIZE: usize = 1024;
@@ -550,6 +555,62 @@ impl Server {
         }
     }
 
+    /// Fingerprint of everything this server advertises on connect.
+    ///
+    /// Handed to the client in server info; a client that offers the same token
+    /// back on a later connection is not told what it already knows, which
+    /// keeps a reconnect from re-sending the whole channel and service
+    /// catalogue. Any change to the set yields a different token, so a stale
+    /// client simply receives the full advertisement as before.
+    fn advertisement_token(&self) -> String {
+        // Two independent FNV-1a passes, concatenated: deterministic, no new
+        // dependency, and wide enough that a collision -- which would leave a
+        // client holding a stale catalogue -- is not a practical concern.
+        const OFFSET_BASIS_A: u64 = 0xcbf2_9ce4_8422_2325;
+        const OFFSET_BASIS_B: u64 = 0x9e37_79b9_7f4a_7c15;
+        const PRIME: u64 = 0x0000_0100_0000_01b3;
+
+        let mut hash_a = OFFSET_BASIS_A;
+        let mut hash_b = OFFSET_BASIS_B;
+        let mut absorb = |bytes: &[u8]| {
+            for &byte in bytes {
+                hash_a = (hash_a ^ u64::from(byte)).wrapping_mul(PRIME);
+                hash_b = (hash_b ^ u64::from(byte).rotate_left(3)).wrapping_mul(PRIME);
+            }
+            // Length-delimit, so concatenated fields cannot alias each other.
+            hash_a ^= bytes.len() as u64;
+            hash_b = hash_b.rotate_left(7) ^ bytes.len() as u64;
+        };
+
+        if let Some(context) = self.context.upgrade() {
+            let mut channels = context.channels_snapshot();
+            channels.sort_by_key(|channel| u64::from(channel.id()));
+            for channel in &channels {
+                absorb(&u64::from(channel.id()).to_le_bytes());
+                absorb(channel.topic().as_bytes());
+                absorb(channel.message_encoding().as_bytes());
+                if let Some(schema) = channel.schema() {
+                    absorb(schema.name.as_bytes());
+                    absorb(schema.encoding.as_bytes());
+                    absorb(&schema.data);
+                }
+            }
+        }
+
+        let mut service_names: Vec<String> = self
+            .services
+            .read()
+            .values()
+            .map(|service| service.name().to_string())
+            .collect();
+        service_names.sort();
+        for name in &service_names {
+            absorb(name.as_bytes());
+        }
+
+        format!("{hash_a:016x}{hash_b:016x}")
+    }
+
     /// Builds a server info message.
     fn server_info(&self) -> ServerInfo {
         let mut metadata = self.server_info.clone();
@@ -557,6 +618,10 @@ impl Server {
             tracing::warn!("Overwriting reserved server_info key 'fg-library'");
         }
         metadata.insert("fg-library".into(), get_library_version());
+        metadata.insert(
+            ADVERTISEMENT_TOKEN_METADATA_KEY.into(),
+            self.advertisement_token(),
+        );
 
         ServerInfo::new(&self.name)
             .with_capabilities(
@@ -599,12 +664,31 @@ impl Server {
             }
         };
 
-        let Ok(mut ws_stream) = handshake::do_handshake(stream).await else {
+        let Ok(handshake) = handshake::do_handshake(stream).await else {
             tracing::error!("Dropping client {addr}: handshake failed");
             return;
         };
+        let handshake::Handshake {
+            stream: mut ws_stream,
+            advertisement_token: offered_token,
+        } = handshake;
 
-        let message = Message::from(&self.server_info());
+        let server_info = self.server_info();
+        let current_token = server_info
+            .metadata
+            .get(ADVERTISEMENT_TOKEN_METADATA_KEY)
+            .cloned();
+        // Only suppress when the client proves it already holds exactly this
+        // catalogue. Anything else -- no token, an old one, a different server
+        // -- advertises in full.
+        let catalogue_is_current = offered_token.is_some() && offered_token == current_token;
+        if catalogue_is_current {
+            tracing::info!(
+                "Client {addr} already holds the current advertisement catalogue; skipping it"
+            );
+        }
+
+        let message = Message::from(&server_info);
         if let Err(err) = ws_stream.send(message).await {
             // ServerInfo is required; do not store this client.
             tracing::error!("Failed to send required server info: {err}");
@@ -619,6 +703,9 @@ impl Server {
             self.message_backlog_size as usize,
             self.channel_filter.clone(),
         );
+        if catalogue_is_current {
+            client.suppress_initial_advertisement();
+        }
         self.register_client_and_advertise(&client);
         client.run().await;
         self.unregister_client(&client);
@@ -641,10 +728,21 @@ impl Server {
             listener.on_client_connect();
         }
 
+        // Read before add_sink, which consumes the flag.
+        let catalogue_is_current = client.is_initial_advertisement_suppressed();
+
         // Add the client as a sink. This synchronously triggers advertisements for all channels
         // via the `Sink::add_channel` callback.
         if let Some(context) = self.context.upgrade() {
             context.add_sink(client.clone());
+        }
+
+        if catalogue_is_current {
+            tracing::info!(
+                "Suppressed service advertisement to client {}: catalogue already current",
+                client.addr()
+            );
+            return;
         }
 
         // Advertise services.

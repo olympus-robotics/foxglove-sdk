@@ -313,6 +313,12 @@ impl Context {
         self.0.write().remove_sink(sink_id)
     }
 
+    /// Returns a snapshot of the channels currently registered on this context.
+    #[doc(hidden)] // Hidden until Sink is public.
+    pub fn channels_snapshot(&self) -> Vec<Arc<RawChannel>> {
+        self.0.read().channels.values().cloned().collect()
+    }
+
     /// Subscribes a sink to the specified channels.
     ///
     /// This method has no effect for sinks that return true from [`Sink::auto_subscribe`].

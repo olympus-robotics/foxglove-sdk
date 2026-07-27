@@ -108,10 +108,18 @@ async fn test_client_connect() {
         .expect("Failed to connect");
 
     let msg = expect_recv!(client, ServerMessage::ServerInfo);
+    // The advertisement token is server-derived and varies with the channel
+    // and service set, so compare everything else and assert its presence.
+    assert!(msg.metadata.contains_key("voliro-advertisement-token"));
+    let mut expected_metadata = maplit::hashmap! {"fg-library".into() => get_library_version()};
+    expected_metadata.insert(
+        "voliro-advertisement-token".into(),
+        msg.metadata["voliro-advertisement-token"].clone(),
+    );
     assert_eq!(
         msg,
         ServerInfo::new("mock_server")
-            .with_metadata(maplit::hashmap! {"fg-library".into() => get_library_version()})
+            .with_metadata(expected_metadata)
             .with_session_id("mock_sess_id")
     );
 
@@ -430,6 +438,70 @@ async fn test_advertise_schemaless_channels() {
     assert!(logs_contain(
         "Ignoring advertise channel for /schemaless_other because a schema is required"
     ));
+
+    let _ = server.stop();
+}
+
+#[traced_test]
+#[tokio::test]
+async fn test_advertisement_token_suppresses_catalogue_but_keeps_subscriptions() {
+    let ctx = Context::new();
+    let server = create_server(&ctx, ServerOptions::default());
+    let ch = new_channel("/foo", &ctx);
+    let addr = server
+        .start("127.0.0.1", 0)
+        .await
+        .expect("Failed to start server");
+
+    // First connection: no token, so the catalogue arrives in full.
+    let mut first = WebSocketClient::connect(format!("{addr}"))
+        .await
+        .expect("Failed to connect");
+    let info = expect_recv!(first, ServerMessage::ServerInfo);
+    let token = info
+        .metadata
+        .get("voliro-advertisement-token")
+        .expect("server info carries an advertisement token")
+        .clone();
+    let advertise = expect_recv!(first, ServerMessage::Advertise);
+    assert_eq!(advertise.channels.len(), 1);
+    drop(first);
+
+    // Second connection offers the token back: no advertisement should follow
+    // the server info.
+    let mut second = WebSocketClient::connect_with_query(
+        format!("{addr}"),
+        format!("advertisement_token={token}"),
+    )
+    .await
+    .expect("Failed to connect");
+    let info = expect_recv!(second, ServerMessage::ServerInfo);
+    assert_eq!(
+        info.metadata.get("voliro-advertisement-token"),
+        Some(&token)
+    );
+
+    // The client can still subscribe by the channel id it already knew, which
+    // proves the server recorded the channel even though it sent nothing.
+    second
+        .send(&Subscribe::new([Subscription::new(1, ch.id().into())]))
+        .await
+        .expect("Failed to send");
+    assert_eventually(|| ch.num_sinks() == 1).await;
+
+    ch.log(b"payload");
+    let msg = expect_recv!(second, ServerMessage::MessageData);
+    assert_eq!(msg.subscription_id, 1);
+    assert_eq!(msg.data.as_ref(), b"payload");
+
+    // A stale token gets the full catalogue instead.
+    let mut third =
+        WebSocketClient::connect_with_query(format!("{addr}"), "advertisement_token=stale")
+            .await
+            .expect("Failed to connect");
+    expect_recv!(third, ServerMessage::ServerInfo);
+    let advertise = expect_recv!(third, ServerMessage::Advertise);
+    assert_eq!(advertise.channels.len(), 1);
 
     let _ = server.stop();
 }
@@ -1800,14 +1872,17 @@ async fn test_server_info_metadata_sent_to_client() {
 
     let msg = expect_recv!(client, ServerMessage::ServerInfo);
 
-    assert_eq!(
-        msg.metadata,
-        hashmap! {
-            "fg-library".into() => get_library_version(),
-            "key1".into() => "val1".into(),
-            "key2".into() => "val2".into(),
-        }
+    assert!(msg.metadata.contains_key("voliro-advertisement-token"));
+    let mut expected_metadata = hashmap! {
+        "fg-library".into() => get_library_version(),
+        "key1".into() => "val1".into(),
+        "key2".into() => "val2".into(),
+    };
+    expected_metadata.insert(
+        "voliro-advertisement-token".into(),
+        msg.metadata["voliro-advertisement-token"].clone(),
     );
+    assert_eq!(msg.metadata, expected_metadata);
 
     let _ = server.stop();
 }
